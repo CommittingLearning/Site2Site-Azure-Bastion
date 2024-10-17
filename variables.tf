@@ -43,5 +43,5 @@ variable "IPsku" {
 variable "Bastionsku" {
     description = "sku value for Bastion deployment"
     type        = string
-    default     = "Developer"
+    default     = "Basic"
 }
