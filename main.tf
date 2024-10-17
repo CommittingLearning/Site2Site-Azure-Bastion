@@ -12,6 +12,8 @@ resource "azurerm_bastion_host" "bastion" {
     location            = var.location
     resource_group_name = "${var.rg_name}_${var.environment}"
     sku                 = var.Bastionsku
+    # Virtual network ID is required if using developer sku
+    virtual_network_id  = data.azurerm_virtual_network.vnet.id
 
 
     ip_configuration {

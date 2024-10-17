@@ -12,6 +12,11 @@ data "terraform_remote_state" "vnet" {
     }
 }
 
+data "azurerm_virtual_network" "vnet" {
+    name                = data.terraform_remote_state.vnet.outputs.vnet_name
+    resource_group_name = "${var.rg_name}_${var.environment}"
+}
+
 data "azurerm_subnet" "bastion_subnet" {
     name                 = data.terraform_remote_state.vnet.outputs.subnetbastion_name
     resource_group_name  = "${var.rg_name}_${var.environment}"
