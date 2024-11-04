@@ -7,6 +7,7 @@ resource "azurerm_public_ip" "bastion_public_ip" {
     sku                 = var.IPsku
 }
 
+# Create a Bastion Host in the Bastion Subnet
 resource "azurerm_bastion_host" "bastion" {
     name                = "bastion-${var.environment}"
     location            = var.location
