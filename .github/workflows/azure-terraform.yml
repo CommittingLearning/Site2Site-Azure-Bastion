@@ -1,0 +1,165 @@
+name: Azure Terraform CI/CD Pipeline
+
+on:
+  pull_request:
+    branches:
+      - development
+      - production
+      - testing
+  push:
+    branches:
+      - development
+      - production
+
+permissions: 
+  id-token   : write  # This allows fetching an OIDC token for authentication
+  contents   : read   # This allows reading the repository contents
+  issues     : write  # Required for creating approval issues
+
+jobs:
+  validate-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    # Login to Azure using OpenID Connect (OIDC)
+    - name: 'Azure Login'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v1
+      
+    # Set environment variable based on branch
+    - name: Set environment variable based on branch
+      run : |
+        if [[ "${{ github.ref }}" == "refs/heads/development" ]]; then
+          echo "ENVIRONMENT=development" >> $GITHUB_ENV
+        elif [[ "${{ github.ref }}" == "refs/heads/production" ]]; then
+          echo "ENVIRONMENT=production" >> $GITHUB_ENV
+        else
+          echo "ENVIRONMENT=default" >> $GITHUB_ENV
+        fi
+
+    # Initialize Terraform Working Directory
+    - name: Terraform Init
+      run : |
+        terraform init -input=false -upgrade \
+          -backend-config="storage_account_name=tsblobstore11${{ env.ENVIRONMENT }}" \
+          -backend-config="container_name=terraform-state" \
+          -backend-config="key=Site2Site_Bastion_${{ env.ENVIRONMENT }}.tfstate" \
+          -backend-config="resource_group_name=Site2Site_rg_${{ env.ENVIRONMENT }}" \
+          -backend-config="use_oidc=true" \
+          -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+          -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+          -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+          -reconfigure \
+          -no-color
+
+    # Pre-deployment checks: Terraform validation
+    - name: Terraform Validate
+      run : terraform validate
+
+    # Terraform Plan with environment passed and save plan output
+    - name: Terraform Plan
+      run : terraform plan -var="environment=${{ env.ENVIRONMENT }}" -var="azure_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" -var="azure_client_id=${{ secrets.AZURE_CLIENT_ID }}" -var="azure_tenant_id=${{ secrets.AZURE_TENANT_ID }}" -out=tfplan
+
+    # Display the Terraform Plan output in the logs
+    - name: Show Terraform Plan
+      run : terraform show -json tfplan
+
+    # Install TFSec for Terraform security checks
+    - name: Install TFSec
+      run : |
+        curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+    # Run TFSec to check Terraform code for potential security issues
+    - name: Run TFSec Security Checks
+      run : tfsec .
+
+    # Skip applying changes in pull requests
+    - name: Skip Apply in Pull Requests
+      if  : github.event_name == 'pull_request'
+      run : |
+        echo "Skipping apply since this is a pull request validation."
+        exit 0
+
+  deploy : 
+    needs  : validate-and-test
+    runs-on: ubuntu-latest
+    if     : github.event_name != 'pull_request'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    # Login to Azure using OpenID Connect (OIDC)
+    - name: 'Azure Login'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v1
+
+      # Set environment variable based on branch
+    - name: Set environment variable based on branch
+      run : |
+        if [[ "${{ github.ref }}" == "refs/heads/development" ]]; then
+          echo "ENVIRONMENT=development" >> $GITHUB_ENV
+        elif [[ "${{ github.ref }}" == "refs/heads/production" ]]; then
+          echo "ENVIRONMENT=production" >> $GITHUB_ENV
+        else
+          echo "ENVIRONMENT=default" >> $GITHUB_ENV
+        fi
+
+    # Initialize Terraform Working Directory
+    - name: Terraform Init
+      run : |
+        terraform init -input=false -upgrade \
+          -backend-config="storage_account_name=tsblobstore11${{ env.ENVIRONMENT }}" \
+          -backend-config="container_name=terraform-state" \
+          -backend-config="key=Site2Site_Bastion_${{ env.ENVIRONMENT }}.tfstate" \
+          -backend-config="resource_group_name=Site2Site_rg_${{ env.ENVIRONMENT }}" \
+          -backend-config="use_oidc=true" \
+          -backend-config="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+          -backend-config="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+          -backend-config="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+          -reconfigure \
+          -no-color
+
+    # Re-run Terraform plan before applying
+    - name: Terraform Plan (Re-run)
+      run : terraform plan -var="environment=${{ env.ENVIRONMENT }}" -var="azure_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" -var="azure_client_id=${{ secrets.AZURE_CLIENT_ID }}" -var="azure_tenant_id=${{ secrets.AZURE_TENANT_ID }}" -out=tfplan
+
+    # Display the Terraform Plan output in the logs before apply
+    - name: Show Terraform Plan (Re-run)
+      run : terraform show -json tfplan
+
+    # Pause and wait for manual approval
+    - name: Manual Approval before Apply
+      uses: trstringer/manual-approval@v1
+      with:
+        secret: ${{ secrets.github_TOKEN }}
+        approvers: CommittingLearning
+        issue-title: "Performing Terraform Apply in ${{ env.ENVIRONMENT }} environment"
+        issue-body: "Please approve or deny the deployment"
+
+    # Apply changes after approval
+    - name: Terraform Apply
+      run : terraform apply -auto-approve "tfplan"
+
+    # Wait for demonstrated time
+    - name: Wait for demonstration period
+      run : sleep 450
+
+    # Destroy resources to avoid unnecessary costs
+    - name: Terraform Destroy
+      run : terraform destroy -auto-approve -var="environment=${{ env.ENVIRONMENT }}" -var="azure_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" -var="azure_client_id=${{ secrets.AZURE_CLIENT_ID }}" -var="azure_tenant_id=${{ secrets.AZURE_TENANT_ID }}"
